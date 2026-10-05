@@ -1,11 +1,9 @@
 import os
 import subprocess
-import sys
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 VERSIONS = ["3.8", "3.11", "3.14"]
-
 
 def run_script():
     version = version_var.get()
@@ -26,9 +24,7 @@ def run_script():
     except Exception as exc:
         messagebox.showerror("Fehler", f"Start fehlgeschlagen: {exc}")
 
-
 def browse_file():
-    from tkinter import filedialog
     file_path = filedialog.askopenfilename(
         title="Python-Datei auswählen",
         filetypes=[("Python Files", "*.py"), ("Alle Dateien", "*.*")]
@@ -37,9 +33,8 @@ def browse_file():
         script_entry.delete(0, tk.END)
         script_entry.insert(0, file_path)
 
-
 root = tk.Tk()
-root.title("Python Version Launcher")
+root.title("Python Version Launcher (GUI)")
 root.geometry("520x220")
 root.resizable(False, False)
 
