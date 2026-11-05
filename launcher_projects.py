@@ -10,6 +10,11 @@ PROJECTS = {
         "path": "",
         "default_version": "3.11"
     },
+    "Testimonial Studio": {
+        "script": "testimonial_generator.py",
+        "path": "",
+        "default_version": "3.11"
+    },
     "Sitemap XML Generator": {
         "script": "app.py",
         "path": "",
