@@ -1,0 +1,2 @@
+# Excel-Import ist optional. Für CSV und alle anderen Funktionen ist kein Zusatzpaket nötig.
+openpyxl>=3.1,<4

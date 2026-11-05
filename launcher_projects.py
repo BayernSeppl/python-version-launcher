@@ -5,6 +5,11 @@ from tkinter import ttk, messagebox
 from tkinter import filedialog
 
 PROJECTS = {
+    "FAQ Studio": {
+        "script": "faq_generator.py",
+        "path": "",
+        "default_version": "3.11"
+    },
     "Sitemap XML Generator": {
         "script": "app.py",
         "path": "",
@@ -18,6 +23,7 @@ PROJECTS = {
 }
 
 VERSIONS = ["3.8", "3.11", "3.14"]
+
 
 def run_project():
     project = project_var.get()
@@ -45,6 +51,7 @@ def run_project():
     except Exception as exc:
         messagebox.showerror("Fehler", f"Start fehlgeschlagen: {exc}")
 
+
 def browse_project_path():
     project = project_var.get()
     if not project:
@@ -55,6 +62,7 @@ def browse_project_path():
     if folder_path:
         PROJECTS[project]["path"] = folder_path
         path_label.config(text=f"Pfad: {folder_path}")
+
 
 def on_project_change(*args):
     project = project_var.get()
@@ -67,6 +75,7 @@ def on_project_change(*args):
         version_var.set(info["default_version"])
     else:
         path_label.config(text="Pfad: Noch nicht konfiguriert")
+
 
 root = tk.Tk()
 root.title("Projekt Launcher mit Python-Version Auswahl")
@@ -105,7 +114,7 @@ start_btn.grid(row=7, column=0, sticky="w", pady=(22, 0))
 
 info = ttk.Label(
     main,
-    text="Hinweis: Für die Sitemap-Tools ist meist Python 3.11 die richtige Wahl.\nFür alte Programme kann 3.8 nötig sein, für neue Programme ggf. 3.14.",
+    text="Wähle ein Tool, den zugehörigen Ordner und die passende Python-Version.",
     foreground="blue",
     wraplength=560,
     justify="left"
