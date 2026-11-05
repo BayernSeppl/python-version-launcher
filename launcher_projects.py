@@ -5,7 +5,12 @@ from tkinter import ttk, messagebox
 from tkinter import filedialog
 
 PROJECTS = {
-    "FAQ Studio": {
+    "FAQ Studio Premium": {
+        "script": "faq_studio_premium.py",
+        "path": "",
+        "default_version": "3.11"
+    },
+    "FAQ Studio (Classic)": {
         "script": "faq_generator.py",
         "path": "",
         "default_version": "3.11"
@@ -73,10 +78,7 @@ def on_project_change(*args):
     project = project_var.get()
     if project:
         info = PROJECTS[project]
-        if info["path"]:
-            path_label.config(text=f"Pfad: {info['path']}")
-        else:
-            path_label.config(text="Pfad: Noch nicht konfiguriert")
+        path_label.config(text=f"Pfad: {info['path']}" if info["path"] else "Pfad: Noch nicht konfiguriert")
         version_var.set(info["default_version"])
     else:
         path_label.config(text="Pfad: Noch nicht konfiguriert")
@@ -86,44 +88,27 @@ root = tk.Tk()
 root.title("Projekt Launcher mit Python-Version Auswahl")
 root.geometry("620x330")
 root.resizable(False, False)
-
 main = ttk.Frame(root, padding=18)
 main.pack(fill="both", expand=True)
-
 header = ttk.Label(main, text="Projekt Launcher", font=("Segoe UI", 14, "bold"))
 header.grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 12))
-
 project_label = ttk.Label(main, text="Projekt auswählen:", font=("Segoe UI", 10, "bold"))
 project_label.grid(row=1, column=0, sticky="w")
-
 project_var = tk.StringVar()
 project_combo = ttk.Combobox(main, textvariable=project_var, values=list(PROJECTS.keys()), state="readonly", width=55)
 project_combo.grid(row=2, column=0, columnspan=2, sticky="w")
 project_combo.bind("<<ComboboxSelected>>", on_project_change)
-
 path_label = ttk.Label(main, text="Pfad: Noch nicht konfiguriert", foreground="gray")
 path_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
-
 browse_btn = ttk.Button(main, text="Ordner auswählen", command=browse_project_path)
 browse_btn.grid(row=4, column=0, sticky="w", pady=(8, 15))
-
 version_label = ttk.Label(main, text="Python-Version:", font=("Segoe UI", 10, "bold"))
 version_label.grid(row=5, column=0, sticky="w")
-
 version_var = tk.StringVar(value="3.11")
 version_combo = ttk.Combobox(main, textvariable=version_var, values=VERSIONS, state="readonly", width=12)
 version_combo.grid(row=6, column=0, sticky="w")
-
 start_btn = ttk.Button(main, text="Projekt starten", command=run_project)
 start_btn.grid(row=7, column=0, sticky="w", pady=(22, 0))
-
-info = ttk.Label(
-    main,
-    text="Wähle ein Tool, den zugehörigen Ordner und die passende Python-Version.",
-    foreground="blue",
-    wraplength=560,
-    justify="left"
-)
+info = ttk.Label(main, text="Wähle ein Tool, den zugehörigen Ordner und die passende Python-Version.", foreground="blue", wraplength=560, justify="left")
 info.grid(row=8, column=0, columnspan=2, sticky="w", pady=(15, 0))
-
 root.mainloop()

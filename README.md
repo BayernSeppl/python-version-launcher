@@ -2,26 +2,26 @@
 
 Python Version Manager – wähle zwischen Python 3.8, 3.11 und 3.14 für deine Tools.
 
-## Testimonial Studio
+## FAQ Studio Premium
 
-Zusätzlich zum FAQ-Studio ist jetzt ein lokaler Testimonial-Generator enthalten. Das Tool ist ideal für echte Kundenstimmen, Freigaben und die professionelle Aufbereitung von Feedback.
+Professionelle FAQ-Seiten einfach erstellen und veröffentlichen. Die Desktop-App bietet Live-Vorschau, Kategorien, Suche, CSV-/Excel-Import, Antwortvorlagen, KI-Prompt-Kopie sowie HTML-, Markdown-, CSV- und JSON-Export.
 
 ### Schnellstart
 
 ```bash
-python testimonial_generator.py
+python faq_studio_premium.py
 ```
 
-Windows:
+Windows: `py faq_studio_premium.py`
 
-```bat
-py testimonial_generator.py
-```
-
-Für Excel-Dateien optional:
+Excel-Unterstützung optional installieren:
 
 ```bash
-python -m pip install -r requirements-testimonials.txt
+python -m pip install -r requirements-faq.txt
 ```
 
-Mehr Details stehen in [TESTIMONIAL_GENERATOR.md](TESTIMONIAL_GENERATOR.md).
+Details: [FAQ_STUDIO.md](FAQ_STUDIO.md).
+
+## Testimonial Studio
+
+Lokales Tool für echte Kundenstimmen mit CSV-/Excel-Import, Freigabe-Status, Vorlagen und Export. Starte mit `python testimonial_generator.py`. Details: [TESTIMONIAL_GENERATOR.md](TESTIMONIAL_GENERATOR.md).
