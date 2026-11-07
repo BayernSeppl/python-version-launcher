@@ -1,7 +1,7 @@
 @echo off
-py -m pip install --upgrade pip
-py -m pip install pyinstaller
-py -m PyInstaller --onefile --windowed --name LottoPro --clean lotto_app.py
+py -3 -m pip install --upgrade pip
+py -3 -m pip install -r requirements.txt
+py -3 -m PyInstaller --onefile --windowed --name LottoPro --clean lotto_app.py
 if exist dist\LottoPro.exe (
     echo.
     echo EXE erstellt: dist\LottoPro.exe
