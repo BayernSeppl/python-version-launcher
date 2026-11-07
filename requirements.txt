@@ -1,0 +1,366 @@
+import csv
+import os
+import random
+import sys
+from collections import defaultdict
+from tkinter import filedialog, messagebox, ttk
+from tkinter import *
+
+APP_TITLE = "Lotto Pro Analyse"
+APP_VERSION = "0.1"
+NUMBER_MIN = 1
+NUMBER_MAX = 49
+
+
+def generate_demo_history(draw_count=220):
+    """Erzeugt Demo-Ziehungen für die App, damit sie ohne CSV sofort lauffähig ist."""
+    random_seed = random.Random(42)
+    draws = []
+    for _ in range(draw_count):
+        picked = random_seed.sample(list(range(NUMBER_MIN, NUMBER_MAX + 1)), 6)
+        draws.append(sorted(picked))
+    return draws
+
+
+def csv_to_draws(path):
+    """Parses CSV files with either 6 columns or one column containing numbers separated by commas."""
+    rows = []
+    with open(path, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.reader(handle)
+        for raw_row in reader:
+            if not raw_row:
+                continue
+            cleaned = []
+            for cell in raw_row:
+                for part in cell.replace(";", ",").replace(" ", ",").split(","):
+                    text = part.strip()
+                    if not text:
+                        continue
+                    try:
+                        value = int(text)
+                    except ValueError:
+                        continue
+                    cleaned.append(value)
+            if not cleaned:
+                continue
+            # Mehrere Zahlen in einer Zelle oder als Zeile
+            values = []
+            for value in cleaned:
+                if NUMBER_MIN <= value <= NUMBER_MAX:
+                    values.append(value)
+            if 6 <= len(values) <= 12:
+                # Falls mehr als 6 Werte vorkommen, nehme die ersten 6
+                rows.append(sorted(set(values)[:6]))
+    if not rows:
+        raise ValueError("Keine gültigen Lotto-Ziehungen in der CSV gefunden.")
+    return rows
+
+
+def normalize_draws(draws):
+    normalized = []
+    for entry in draws:
+        values = []
+        for item in entry:
+            try:
+                value = int(item)
+            except (TypeError, ValueError):
+                continue
+            if NUMBER_MIN <= value <= NUMBER_MAX:
+                values.append(value)
+        if len(values) == 6:
+            normalized.append(sorted(set(values)))
+    if not normalized:
+        raise ValueError("Keine gültigen Ziehungen mit genau 6 Zahlen gefunden.")
+    return normalized
+
+
+def compute_number_stats(draws):
+    """Gibt für jede Zahl 1..49 die Häufigkeit und den letzten Abstand zurück."""
+    stats = {n: {"count": 0, "last_draw_index": None, "last_gap": None} for n in range(NUMBER_MIN, NUMBER_MAX + 1)}
+    for index, draw in enumerate(draws):
+        for number in draw:
+            previous = stats[number]["last_draw_index"]
+            stats[number]["count"] += 1
+            if previous is not None:
+                stats[number]["last_gap"] = index - previous
+            stats[number]["last_draw_index"] = index
+    return stats
+
+
+def build_weighted_pool(stats, total_draws):
+    pool = {}
+    for n in range(NUMBER_MIN, NUMBER_MAX + 1):
+        count = stats[n]["count"]
+        gap = stats[n]["last_gap"] if stats[n]["last_gap"] is not None else total_draws
+        # Gewichtung: Häufigkeit + Abstand in der jüngeren Vergangenheit
+        score = (count * 2.0) + max(0, (total_draws - gap) * 0.7)
+        pool[n] = score
+    return pool
+
+
+def valid_set(numbers, min_sum, max_sum, min_even, max_even, min_odd, max_odd):
+    if not min_sum <= sum(numbers) <= max_sum:
+        return False
+    even_count = sum(1 for x in numbers if x % 2 == 0)
+    odd_count = 6 - even_count
+    if not (min_even <= even_count <= max_even):
+        return False
+    if not (min_odd <= odd_count <= max_odd):
+        return False
+    return True
+
+
+def generate_tips(draws, count, min_sum, max_sum, min_even, max_even, min_odd, max_odd):
+    stats = compute_number_stats(draws)
+    pool = build_weighted_pool(stats, len(draws))
+    numbers = list(range(NUMBER_MIN, NUMBER_MAX + 1))
+    weighted = []
+    for n in numbers:
+        weighted.extend([n] * max(1, int(pool[n] * 10)))
+
+    generated = []
+    attempts = 0
+    while len(generated) < count and attempts < count * 400:
+        attempts += 1
+        candidate = sorted(random.sample(numbers, 6))
+        # Graue Korrektur: Zahlen mit höherem Gewicht sind wahrscheinlicher
+        if random.random() < 0.65:
+            candidate = []
+            while len(candidate) < 6:
+                choice = random.choices(numbers, weights=[pool[n] for n in numbers], k=1)[0]
+                if choice not in candidate:
+                    candidate.append(choice)
+            candidate = sorted(candidate)
+
+        if valid_set(candidate, min_sum, max_sum, min_even, max_even, min_odd, max_odd):
+            generated.append(candidate)
+
+    if len(generated) < count:
+        # Fallback: ergänze mit einfachen validen Sets, damit die App immer etwas erzeugt.
+        while len(generated) < count:
+            fallback = sorted(random.sample(numbers, 6))
+            if valid_set(fallback, min_sum, max_sum, min_even, max_even, min_odd, max_odd):
+                generated.append(fallback)
+
+    return generated[:count]
+
+
+def format_tip_block(tip):
+    return " ".join(f"{x:02d}" for x in tip)
+
+
+def export_tips_to_csv(path, tips):
+    with open(path, "w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["Tipp", "Zahlen", "Summe", "Gerade", "Ungerade"])
+        for index, tip in enumerate(tips, start=1):
+            writer.writerow([
+                index,
+                " ".join(f"{x:02d}" for x in tip),
+                sum(tip),
+                sum(1 for x in tip if x % 2 == 0),
+                sum(1 for x in tip if x % 2 != 0),
+            ])
+
+
+class LottoApp(Tk):
+    def __init__(self):
+        super().__init__()
+        self.title(APP_TITLE)
+        self.geometry("1100x700")
+        self.minsize(1000, 600)
+        self.iconbitmap(default=None)
+
+        self.draws = generate_demo_history(220)
+        self.history_path = ""
+        self.create_widgets()
+        self.refresh_stats()
+
+    def create_widgets(self):
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        main = ttk.Frame(self, padding=16)
+        main.pack(fill=BOTH, expand=True)
+        main.columnconfigure(1, weight=1)
+
+        # Titel
+        ttk.Label(main, text="Lotto Pro Analyse - 6 aus 49", font=("Segoe UI", 18, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w", pady=(0, 12)
+        )
+
+        # Hinweis
+        disclaimer = ttk.Label(
+            main,
+            text="Hinweis: Historische Daten helfen bei Analyse und Organisation, aber keine zukünftigen Lotto-Ergebnisse sind vorhersehbar.",
+            foreground="#444",
+            wraplength=780,
+            justify="left",
+        )
+        disclaimer.grid(row=1, column=0, columnspan=3, sticky="w", pady=(0, 12))
+
+        # Bereich: Laden / Demo
+        load_frame = ttk.LabelFrame(main, text="Dateien")
+        load_frame.grid(row=2, column=0, columnspan=3, sticky="ew", padx=0, pady=(0, 10))
+        load_frame.columnconfigure(0, weight=1)
+
+        ttk.Button(load_frame, text="Demo-Daten laden", command=self.load_demo_data).grid(row=0, column=0, sticky="w", padx=10, pady=10)
+        ttk.Button(load_frame, text="CSV importieren", command=self.load_csv).grid(row=0, column=1, sticky="w", padx=(0, 10), pady=10)
+        self.status_var = StringVar(value="Demo-Daten aktiv")
+        ttk.Label(load_frame, textvariable=self.status_var, foreground="#0a4d0a").grid(row=0, column=2, sticky="w", padx=10)
+
+        # Eingabefelder
+        settings = ttk.LabelFrame(main, text="Tipp-Filter")
+        settings.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        settings.columnconfigure(1, weight=1)
+
+        rows = [
+            ("Anzahl Tipps", "tip_count", 10),
+            ("Min Summe", "min_sum", 90),
+            ("Max Summe", "max_sum", 150),
+            ("Min Gerade", "min_even", 2),
+            ("Max Gerade", "max_even", 4),
+            ("Min Ungerade", "min_odd", 2),
+            ("Max Ungerade", "max_odd", 4),
+        ]
+        self.input_vars = {}
+        for index, (label_text, key, default) in enumerate(rows, start=0):
+            ttk.Label(settings, text=label_text).grid(row=index, column=0, sticky="w", padx=10, pady=6)
+            var = StringVar(value=str(default))
+            self.input_vars[key] = var
+            ttk.Entry(settings, textvariable=var, width=18).grid(row=index, column=1, sticky="w", padx=10, pady=6)
+
+        ttk.Button(main, text="Tipps erzeugen", command=self.generate).grid(row=4, column=0, sticky="w", pady=(0, 10))
+        ttk.Button(main, text="CSV exportieren", command=self.export_csv).grid(row=4, column=1, sticky="w", pady=(0, 10))
+
+        # Statistiken rechts
+        summary = ttk.LabelFrame(main, text="Analyse")
+        summary.grid(row=3, column=3, rowspan=2, sticky="nsew", padx=(12, 0), pady=(0, 10))
+        summary.columnconfigure(0, weight=1)
+
+        self.summary_text = Text(summary, height=14, width=36, wrap="word", state="disabled")
+        self.summary_text.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+
+        # Ergebnisausgabe
+        table_frame = ttk.LabelFrame(main, text="Erzeugte Tipps")
+        table_frame.grid(row=5, column=0, columnspan=4, sticky="nsew", pady=(10, 0))
+        table_frame.columnconfigure(0, weight=1)
+        table_frame.rowconfigure(0, weight=1)
+
+        columns = ("#0", "Tipp", "Zahlen", "Summe", "Gerade", "Ungerade")
+        self.tree = ttk.Treeview(table_frame, columns=("Tipp", "Zahlen", "Summe", "Gerade", "Ungerade"), show="headings")
+        self.tree.heading("Tipp", text="Tipp Nr.")
+        self.tree.heading("Zahlen", text="Zahlen")
+        self.tree.heading("Summe", text="Summe")
+        self.tree.heading("Gerade", text="Gerade")
+        self.tree.heading("Ungerade", text="Ungerade")
+        self.tree.column("Tipp", width=70, anchor="center")
+        self.tree.column("Zahlen", width=220, anchor="center")
+        self.tree.column("Summe", width=80, anchor="center")
+        self.tree.column("Gerade", width=80, anchor="center")
+        self.tree.column("Ungerade", width=90, anchor="center")
+        self.tree.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+
+    def _read_int(self, key, default):
+        try:
+            return int(self.input_vars[key].get())
+        except ValueError:
+            return default
+
+    def load_demo_data(self):
+        self.draws = generate_demo_history(220)
+        self.status_var.set("Demo-Daten aktiv")
+        self.refresh_stats()
+
+    def load_csv(self):
+        path = filedialog.askopenfilename(title="CSV mit Lotto-Ziehungen auswählen", filetypes=[("CSV", "*.csv"), ("Alle Dateien", "*.*")])
+        if not path:
+            return
+        try:
+            self.draws = csv_to_draws(path)
+            self.history_path = path
+            self.status_var.set(f"CSV geladen: {os.path.basename(path)}")
+            self.refresh_stats()
+        except Exception as exc:
+            messagebox.showerror("Fehler", f"CSV konnte nicht gelesen werden: {exc}")
+
+    def refresh_stats(self):
+        if not self.draws:
+            return
+        stats = compute_number_stats(self.draws)
+        total_draws = len(self.draws)
+        top_numbers = sorted(stats.items(), key=lambda item: (item[1]["count"], -item[0]), reverse=True)[:10]
+        lines = [
+            f"Anzahl Ziehungen: {total_draws}",
+            f"Zahlenbereich: {NUMBER_MIN}-{NUMBER_MAX}",
+            "",
+            "Top häufige Zahlen:",
+        ]
+        for number, info in top_numbers:
+            lines.append(f"{number:02d}: {info['count']}x")
+        self._set_summary_text("\n".join(lines))
+
+    def _set_summary_text(self, text):
+        self.summary_text.configure(state="normal")
+        self.summary_text.delete(1.0, END)
+        self.summary_text.insert(END, text)
+        self.summary_text.configure(state="disabled")
+
+    def generate(self):
+        try:
+            count = max(1, self._read_int("tip_count", 10))
+            min_sum = self._read_int("min_sum", 90)
+            max_sum = self._read_int("max_sum", 150)
+            min_even = self._read_int("min_even", 2)
+            max_even = self._read_int("max_even", 4)
+            min_odd = self._read_int("min_odd", 2)
+            max_odd = self._read_int("max_odd", 4)
+        except ValueError:
+            messagebox.showerror("Fehler", "Bitte nur ganze Zahlen in die Felder eingeben.")
+            return
+
+        if not self.draws:
+            messagebox.showerror("Fehler", "Bitte zuerst Ziehungsdaten laden.")
+            return
+
+        tips = generate_tips(self.draws, count, min_sum, max_sum, min_even, max_even, min_odd, max_odd)
+        self.tree.delete(*self.tree.get_children())
+        for index, tip in enumerate(tips, start=1):
+            self.tree.insert(parent="", index="end", values=(index, format_tip_block(tip), sum(tip), sum(1 for x in tip if x % 2 == 0), sum(1 for x in tip if x % 2 != 0)))
+
+    def export_csv(self):
+        try:
+            rows = [self.tree.item(item, "values") for item in self.tree.get_children()]
+        except Exception:
+            rows = []
+        if not rows:
+            messagebox.showwarning("Warnung", "Es gibt noch keine Tipps zum Exportieren.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="Tipps als CSV speichern",
+            defaultextension=".csv",
+            filetypes=[("CSV Datei", "*.csv"), ("Alle Dateien", "*.*")],
+        )
+        if not file_path:
+            return
+
+        try:
+            export_tips_to_csv(file_path, [list(map(int, values[1].split())) for values in rows])
+            messagebox.showinfo("Erfolg", f"Tipps wurden gespeichert: {file_path}")
+        except Exception as exc:
+            messagebox.showerror("Fehler", f"Export fehlgeschlagen: {exc}")
+
+
+if __name__ == "__main__":
+    app = LottoApp()
+    app.mainloop()
+    sys.exit(0)
+
+
+"""
+Bitte beachten:
+- Dieses kleine GUI-Projekt dient nur zur Analyse historischer Lotto-Daten.
+- Es kann keine Zukunftsergebnisse garantieren oder vorhersagen.
+- Für eine echte Produktivversion kann das Projekt später um echte historische Draw-Daten, Excel-Import, mehr Filter und eine bessere Statistik erweitert werden.
+"""
