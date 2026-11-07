@@ -1,26 +1,30 @@
 # LottoPro Analyse
 
-Eine Windows-GUI-App für Lotto 6 aus 49 und Build-Skripte für die Programme in diesem Repository.
+Eine Windows-Desktop-App für Lotto 6 aus 49: übersichtliches Dashboard, Häufigkeitsgrafik, Häufigkeits-/Pausenwerte, CSV-Import, Tippfilter und CSV-Export.
 
-## EXE-Dateien unter Windows erstellen
+## Windows-EXE erstellen
 
-Voraussetzung ist Python 3.10 oder neuer. Beim Installieren von Python die Option **Add Python to PATH** aktivieren. Dann im Datei-Explorer den Repository-Ordner öffnen und die gewünschte BAT-Datei doppelklicken:
+1. Repository über **Code → Download ZIP** herunterladen und entpacken (oder mit Git klonen).
+2. Python 3 installieren. Im Installer **Add Python to PATH** aktivieren und sicherstellen, dass Tkinter/Tcl-Tk mitinstalliert wird.
+3. Im entpackten Projektordner `build_lotto_exe.bat` doppelklicken.
+4. Nach erfolgreichem Build liegt die Datei unter `dist\LottoPro.exe`; der Ordner wird geöffnet.
 
-- `build_lotto_exe.bat` erstellt `dist\LottoPro.exe`.
-- `build_launcher_gui_exe.bat` erstellt `dist\PythonVersionLauncher.exe`.
-- `build_launcher_projects_exe.bat` erstellt `dist\ProjektLauncher.exe`.
-- `build_all_exes.bat` erstellt alle drei Dateien.
+Beim ersten Build ist eine Internetverbindung erforderlich, damit PyInstaller installiert werden kann. Die fertige EXE ist für Windows erstellt und läuft ohne separate Python-Installation.
 
-Die BAT-Dateien installieren PyInstaller automatisch. Eine Internetverbindung ist beim ersten Build erforderlich. Build-Ausgaben und EXE-Dateien werden im Ordner `dist` abgelegt.
+## CSV-Importformat
 
-Die beiden Launcher-Programme starten externe Python-Skripte; deren Nutzung setzt weiterhin eine passende Python-Installation auf dem Zielrechner voraus. Die Lotto-App kann dagegen als eigenständige EXE gebaut werden.
+Eine CSV-Zeile muss genau sechs unterschiedliche Hauptzahlen von 1 bis 49 enthalten, zum Beispiel:
 
-## Lotto-App
-
-Die Lotto-App bietet Demo-Daten, CSV-Import, einfache Filter für Tipp-Sätze und CSV-Export. Historische Daten können keine zukünftigen Ziehungen vorhersagen und keine Gewinne garantieren.
-
-Zum direkten Starten mit installiertem Python:
-
-```bat
-py -3 lotto_app.py
+```csv
+Datum;Zahl1;Zahl2;Zahl3;Zahl4;Zahl5;Zahl6
+2025-01-04;3;12;18;27;33;46
+2025-01-08;5;9;14;22;37;49
 ```
+
+Kopfzeilen werden ignoriert. Für die Anzeige des Abstands zur letzten Ziehung müssen die Daten chronologisch sortiert sein (älteste Ziehung zuerst). Zusatz-/Superzahlen nicht in die sechs Hauptzahlen aufnehmen.
+
+## Tipp-Generator
+
+Der Zufallsmodus erstellt zufällige gültige Kombinationen, optional gefiltert nach Zahlensumme und Anzahl gerader Zahlen. „Häufige Zahlen berücksichtigen“ nutzt historische Häufigkeiten nur als Auswahlpräferenz. Das ist keine Vorhersage und verbessert nicht die mathematische Gewinnchance. Jede gültige Kombination hat bei einer fairen Ziehung dieselbe Wahrscheinlichkeit.
+
+Demo-Daten sind synthetisch und ausdrücklich keine echten Ziehungsergebnisse. Die App verbindet sich nicht mit externen Diensten und lädt keine aktuellen Ziehungsdaten automatisch.
