@@ -1,390 +1,468 @@
-"""LottoPro Analyse – desktop app for Lotto 6 aus 49.
+"""LottoPro: desktop analysis for historical Lotto 6 aus 49 draws.
 
-Historical statistics describe past draws only. They do not predict future draws
-or improve the odds of any valid combination in a fair lottery.
+This app organizes historical results; it cannot predict future draws or improve
+odds in a fair lottery.
 """
 
 from __future__ import annotations
 
 import csv
-import itertools
+import os
 import random
+import sqlite3
 import sys
-from collections import Counter
+from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-APP_TITLE = "LottoPro | 6 aus 49"
-MIN_NUMBER = 1
-MAX_NUMBER = 49
-NUMBERS_PER_DRAW = 6
-MAX_TICKETS = 100
+APP_TITLE = "LottoPro Analyse"
+APP_DIR = Path(os.environ.get("APPDATA", Path.home())) / "LottoPro"
+DB_PATH = APP_DIR / "lotto_data.sqlite3"
+LOW, HIGH, DRAW_SIZE = 1, 49, 6
+MAX_TIPS = 100
 
 COLORS = {
-    "background": "#f3f6fb",
-    "surface": "#ffffff",
-    "navy": "#14243a",
-    "blue": "#315efb",
-    "blue_light": "#e9efff",
-    "text": "#182230",
-    "muted": "#66758a",
-    "border": "#e1e7ef",
-    "green": "#16856b",
-    "orange": "#d88722",
+    "bg": "#f2f5fa", "card": "#ffffff", "ink": "#14263e",
+    "muted": "#627188", "blue": "#315efb", "blue_light": "#e8efff",
+    "line": "#dfe6ef", "green": "#16856b",
 }
 
 
-def demo_draws(count: int = 240) -> list[list[int]]:
-    """Return clearly synthetic sample data for a first look at the app."""
-    rng = random.Random(42)
-    return [sorted(rng.sample(range(MIN_NUMBER, MAX_NUMBER + 1), NUMBERS_PER_DRAW)) for _ in range(count)]
+def connect_db() -> sqlite3.Connection:
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(DB_PATH)
+    db.execute("PRAGMA foreign_keys = ON")
+    db.execute("""
+        CREATE TABLE IF NOT EXISTS draws (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            draw_date TEXT NOT NULL DEFAULT '',
+            numbers TEXT NOT NULL,
+            UNIQUE(draw_date, numbers)
+        )
+    """)
+    db.commit()
+    return db
 
 
-def parse_draw_csv(path: str | Path) -> list[list[int]]:
-    """Read rows containing six distinct main numbers (1–49), ignoring headers."""
-    result: list[list[int]] = []
-    with open(path, "r", encoding="utf-8-sig", newline="") as source:
-        for row in csv.reader(source, delimiter=None, skipinitialspace=True):
-            # csv.reader needs a one-character delimiter; normalize common separators.
-            # This branch is retained for compatibility with comma-separated exports.
-            values = _extract_numbers(row)
-            if len(values) != NUMBERS_PER_DRAW:
+def parse_date(text: str) -> str:
+    text = text.strip()
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d-%m-%Y", "%Y/%m/%d", "%d.%m.%y", "%d/%m/%y"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            pass
+    return ""
+
+
+def read_csv_draws(path: str | Path) -> tuple[list[tuple[str, list[int]]], int]:
+    """Accept CSV rows with six main numbers, optionally preceded by a date.
+
+    Rows with more than six numeric cells are skipped rather than guessing which
+    extra fields are bonus numbers or draw identifiers.
+    """
+    parsed: list[tuple[str, list[int]]] = []
+    skipped = 0
+    with open(path, "r", encoding="utf-8-sig", newline="") as stream:
+        sample = stream.read(4096)
+        stream.seek(0)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,\t,")
+        except csv.Error:
+            dialect = csv.excel
+        for row in csv.reader(stream, dialect):
+            if not row:
                 continue
-            if len(set(values)) != NUMBERS_PER_DRAW:
-                continue
-            result.append(sorted(values))
-    if not result:
-        raise ValueError("Keine gültigen Zeilen mit genau sechs verschiedenen Zahlen von 1 bis 49 gefunden.")
-    return result
+            date = ""
+            numbers: list[int] = []
+            for cell in row:
+                text = cell.strip()
+                if not date:
+                    date = parse_date(text)
+                try:
+                    value = int(text)
+                except ValueError:
+                    continue
+                if LOW <= value <= HIGH:
+                    numbers.append(value)
+                else:
+                    # Numeric fields outside 1..49 may be IDs/bonus values; do not
+                    # guess the layout of an unknown export.
+                    continue
+            if len(numbers) == DRAW_SIZE and len(set(numbers)) == DRAW_SIZE:
+                parsed.append((date, sorted(numbers)))
+            else:
+                skipped += 1
+    if not parsed:
+        raise ValueError("Keine gültigen Zeilen mit genau sechs verschiedenen Hauptzahlen (1–49) gefunden.")
+    return parsed, skipped
 
 
-def _extract_numbers(row: list[str]) -> list[int]:
-    values: list[int] = []
-    for cell in row:
-        # Also accept six values written in one cell using spaces/semicolons.
-        for token in cell.replace(";", ",").replace("\t", ",").split(","):
-            token = token.strip()
-            if not token:
-                continue
-            try:
-                number = int(token)
-            except ValueError:
-                continue
-            if MIN_NUMBER <= number <= MAX_NUMBER:
-                values.append(number)
-    return values
+def import_draw_file(path: str | Path) -> tuple[int, int, int]:
+    draws, skipped = read_csv_draws(path)
+    added = 0
+    duplicates = 0
+    db = connect_db()
+    try:
+        with db:
+            for date, numbers in draws:
+                key = " ".join(str(n) for n in numbers)
+                cursor = db.execute(
+                    "INSERT OR IGNORE INTO draws (draw_date, numbers) VALUES (?, ?)",
+                    (date, key),
+                )
+                if cursor.rowcount:
+                    added += 1
+                else:
+                    duplicates += 1
+    finally:
+        db.close()
+    return added, duplicates, skipped
 
 
-def number_statistics(draws: list[list[int]]) -> dict[int, dict[str, int | None]]:
-    """Calculate appearances and draws since last appearance; input oldest first."""
-    stats: dict[int, dict[str, int | None]] = {
-        n: {"count": 0, "last_index": None, "draws_ago": None}
-        for n in range(MIN_NUMBER, MAX_NUMBER + 1)
+def import_csv_folder(folder: str | Path) -> tuple[int, int, int, int]:
+    files = sorted(Path(folder).glob("*.csv"))
+    added = duplicates = skipped = errors = 0
+    if not files:
+        raise ValueError("Im ausgewählten Ordner wurden keine CSV-Dateien gefunden.")
+    for path in files:
+        try:
+            a, d, s = import_draw_file(path)
+            added += a
+            duplicates += d
+            skipped += s
+        except (OSError, UnicodeError, csv.Error, ValueError):
+            errors += 1
+    return added, duplicates, skipped, errors
+
+
+def load_draws() -> list[tuple[str, list[int]]]:
+    db = connect_db()
+    try:
+        rows = db.execute("SELECT draw_date, numbers FROM draws ORDER BY CASE WHEN draw_date='' THEN 1 ELSE 0 END, draw_date, id").fetchall()
+    finally:
+        db.close()
+    return [(date, [int(n) for n in numbers.split()]) for date, numbers in rows]
+
+
+def calculate_stats(draws: list[tuple[str, list[int]]], recent_window: int = 20) -> dict[int, dict[str, int | str]]:
+    recent = draws[-recent_window:] if recent_window else draws
+    counts = {n: 0 for n in range(LOW, HIGH + 1)}
+    recent_counts = {n: 0 for n in range(LOW, HIGH + 1)}
+    last_seen: dict[int, int] = {}
+    for i, (_, numbers) in enumerate(draws):
+        for number in numbers:
+            counts[number] += 1
+            last_seen[number] = i
+    for _, numbers in recent:
+        for number in numbers:
+            recent_counts[number] += 1
+    final_index = len(draws) - 1
+    return {
+        n: {
+            "total": counts[n],
+            "recent": recent_counts[n],
+            "gap": final_index - last_seen[n] if n in last_seen else len(draws),
+        }
+        for n in range(LOW, HIGH + 1)
     }
-    for index, draw in enumerate(draws):
-        for number in draw:
-            entry = stats[number]
-            entry["count"] = int(entry["count"]) + 1
-            entry["last_index"] = index
-    last_index = len(draws) - 1
-    for entry in stats.values():
-        index = entry["last_index"]
-        entry["draws_ago"] = last_index - int(index) if index is not None else len(draws)
-    return stats
 
 
-def ticket_is_valid(numbers: list[int], low_sum: int, high_sum: int,
-                    min_even: int, max_even: int) -> bool:
-    total_even = sum(number % 2 == 0 for number in numbers)
-    return low_sum <= sum(numbers) <= high_sum and min_even <= total_even <= max_even
-
-
-def create_tickets(draws: list[list[int]], count: int, low_sum: int, high_sum: int,
-                   min_even: int, max_even: int, strategy: str) -> list[list[int]]:
-    """Create unique, filtered combinations. Historical mode only changes sampling preference."""
-    if not 1 <= count <= MAX_TICKETS:
-        raise ValueError(f"Bitte eine Tippanzahl von 1 bis {MAX_TICKETS} eingeben.")
-    if not 21 <= low_sum <= high_sum <= 279:
-        raise ValueError("Die Summenfilter müssen zwischen 21 und 279 liegen; Minimum darf Maximum nicht überschreiten.")
+def build_tips(draws: list[tuple[str, list[int]]], amount: int, min_sum: int, max_sum: int,
+               min_even: int, max_even: int, weighted: bool) -> list[list[int]]:
+    if not 1 <= amount <= MAX_TIPS:
+        raise ValueError(f"Bitte 1 bis {MAX_TIPS} Tipps anfordern.")
+    if not 21 <= min_sum <= max_sum <= 279:
+        raise ValueError("Die Summenfilter müssen zwischen 21 und 279 liegen.")
     if not 0 <= min_even <= max_even <= 6:
-        raise ValueError("Die Anzahl gerader Zahlen muss zwischen 0 und 6 liegen.")
-    if min_even > 6 or max_even < 0:
-        raise ValueError("Ungültiger Gerade-Filter.")
-
-    universe = list(range(MIN_NUMBER, MAX_NUMBER + 1))
-    weights = None
-    if strategy == "Häufige Zahlen berücksichtigen" and draws:
-        stats = number_statistics(draws)
-        # Smooth weights avoid zero-probability numbers. This is a preference, not a forecast.
-        weights = [1.0 + int(stats[n]["count"] or 0) for n in universe]
-
+        raise ValueError("Der Gerade-Zahlenfilter muss zwischen 0 und 6 liegen.")
+    pool = list(range(LOW, HIGH + 1))
+    stats = calculate_stats(draws)
+    weights = [1 + int(stats[n]["total"]) for n in pool] if weighted and draws else None
     found: set[tuple[int, ...]] = set()
-    # Attempt cap prevents a restrictive filter from trapping the app in a loop.
-    for _ in range(max(5000, count * 2500)):
-        if len(found) >= count:
+    for _ in range(max(5000, amount * 2500)):
+        if len(found) >= amount:
             break
         if weights:
-            selected: list[int] = []
-            while len(selected) < NUMBERS_PER_DRAW:
-                candidate = random.choices(universe, weights=weights, k=1)[0]
-                if candidate not in selected:
-                    selected.append(candidate)
-            combination = tuple(sorted(selected))
+            picked: list[int] = []
+            while len(picked) < DRAW_SIZE:
+                n = random.choices(pool, weights=weights, k=1)[0]
+                if n not in picked:
+                    picked.append(n)
+            ticket = tuple(sorted(picked))
         else:
-            combination = tuple(sorted(random.sample(universe, NUMBERS_PER_DRAW)))
-        if ticket_is_valid(list(combination), low_sum, high_sum, min_even, max_even):
-            found.add(combination)
-
-    if len(found) < count:
-        raise ValueError(
-            f"Mit diesen Filtern konnten {len(found)} unterschiedliche Tipps gefunden werden. "
-            "Bitte Filter lockern oder weniger Tipps anfordern."
-        )
-    return [list(ticket) for ticket in sorted(found)]
+            ticket = tuple(sorted(random.sample(pool, DRAW_SIZE)))
+        even = sum(n % 2 == 0 for n in ticket)
+        if min_sum <= sum(ticket) <= max_sum and min_even <= even <= max_even:
+            found.add(ticket)
+    if len(found) < amount:
+        raise ValueError("Mit diesen Filtern konnten nicht genügend unterschiedliche Tipps erzeugt werden. Bitte Filter lockern.")
+    return [list(row) for row in sorted(found)]
 
 
-def save_tickets_csv(path: str | Path, tickets: list[list[int]]) -> None:
-    with open(path, "w", encoding="utf-8-sig", newline="") as output:
-        writer = csv.writer(output, delimiter=";")
+def export_tips(path: str | Path, tips: list[list[int]]) -> None:
+    with open(path, "w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.writer(stream, delimiter=";")
         writer.writerow(["Tipp", "Zahlen", "Summe", "Gerade", "Ungerade"])
-        for index, ticket in enumerate(tickets, start=1):
-            writer.writerow([
-                index,
-                " ".join(f"{number:02d}" for number in ticket),
-                sum(ticket),
-                sum(number % 2 == 0 for number in ticket),
-                sum(number % 2 != 0 for number in ticket),
-            ])
+        for i, ticket in enumerate(tips, 1):
+            even = sum(n % 2 == 0 for n in ticket)
+            writer.writerow([i, " ".join(f"{n:02d}" for n in ticket), sum(ticket), even, 6 - even])
 
 
-class LottoApp(tk.Tk):
+class LottoProApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title(APP_TITLE)
-        self.geometry("1120x790")
-        self.minsize(940, 680)
-        self.configure(bg=COLORS["background"])
-        self.draws = demo_draws()
+        self.geometry("1180x820")
+        self.minsize(980, 680)
+        self.configure(bg=COLORS["bg"])
+        self.draws = load_draws()
         self.tickets: list[list[int]] = []
-        self.data_label = "Beispiel-Daten (synthetisch)"
-        self._configure_style()
+        self.window_var = tk.StringVar(value="20")
+        self._setup_style()
         self._build_ui()
-        self.refresh_dashboard()
+        self.refresh()
 
-    def _configure_style(self) -> None:
+    def _setup_style(self) -> None:
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TFrame", background=COLORS["background"])
-        style.configure("Card.TFrame", background=COLORS["surface"])
-        style.configure("TLabel", background=COLORS["surface"], foreground=COLORS["text"], font=("Segoe UI", 10))
-        style.configure("Muted.TLabel", foreground=COLORS["muted"], background=COLORS["surface"], font=("Segoe UI", 9))
-        style.configure("Title.TLabel", foreground=COLORS["navy"], background=COLORS["background"], font=("Segoe UI", 22, "bold"))
-        style.configure("Subtitle.TLabel", foreground=COLORS["muted"], background=COLORS["background"], font=("Segoe UI", 10))
-        style.configure("CardTitle.TLabel", foreground=COLORS["muted"], font=("Segoe UI", 9, "bold"))
-        style.configure("CardValue.TLabel", foreground=COLORS["navy"], font=("Segoe UI", 20, "bold"))
-        style.configure("Primary.TButton", background=COLORS["blue"], foreground="white", font=("Segoe UI", 10, "bold"), padding=(14, 9))
+        style.configure("TFrame", background=COLORS["bg"])
+        style.configure("Card.TFrame", background=COLORS["card"])
+        style.configure("TLabel", background=COLORS["card"], foreground=COLORS["ink"], font=("Segoe UI", 10))
+        style.configure("Muted.TLabel", background=COLORS["bg"], foreground=COLORS["muted"], font=("Segoe UI", 9))
+        style.configure("Title.TLabel", background=COLORS["bg"], foreground=COLORS["ink"], font=("Segoe UI", 23, "bold"))
+        style.configure("CardHead.TLabel", background=COLORS["card"], foreground=COLORS["muted"], font=("Segoe UI", 9, "bold"))
+        style.configure("CardValue.TLabel", background=COLORS["card"], foreground=COLORS["ink"], font=("Segoe UI", 20, "bold"))
+        style.configure("Primary.TButton", background=COLORS["blue"], foreground="white", font=("Segoe UI", 10, "bold"), padding=(12, 8))
         style.map("Primary.TButton", background=[("active", "#244bd0")])
-        style.configure("TButton", padding=(10, 7), font=("Segoe UI", 9))
-        style.configure("Treeview", rowheight=32, font=("Segoe UI", 10), background="white", fieldbackground="white")
-        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), background="#edf1f7", padding=7)
-        style.configure("TEntry", padding=6)
-        style.configure("TCombobox", padding=5)
+        style.configure("Treeview", rowheight=27, font=("Segoe UI", 9))
+        style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), padding=6)
 
     def _build_ui(self) -> None:
-        outer = ttk.Frame(self, padding=(24, 20, 24, 16))
-        outer.pack(fill="both", expand=True)
-        outer.columnconfigure(0, weight=1)
-        outer.rowconfigure(4, weight=1)
+        root = ttk.Frame(self, padding=20)
+        root.pack(fill="both", expand=True)
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(4, weight=1)
 
-        header = ttk.Frame(outer)
-        header.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+        header = ttk.Frame(root)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 14))
         header.columnconfigure(0, weight=1)
         ttk.Label(header, text="LottoPro Analyse", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(header, text="Lotto 6 aus 49  ·  Statistik und Tipp-Organisation", style="Subtitle.TLabel").grid(row=1, column=0, sticky="w", pady=(3, 0))
-        ttk.Button(header, text="Ziehungen importieren", command=self.import_csv).grid(row=0, column=1, rowspan=2, sticky="e")
+        ttk.Label(header, text="6 aus 49 · lokale Ziehungsdaten · Statistik & Tipp-Organisation", style="Muted.TLabel").grid(row=1, column=0, sticky="w")
+        ttk.Button(header, text="CSV importieren", command=self.import_file).grid(row=0, column=1, rowspan=2, padx=4)
+        ttk.Button(header, text="Ordner aktualisieren", command=self.import_folder).grid(row=0, column=2, rowspan=2, padx=4)
 
-        self.notice = tk.Label(
-            outer,
-            text="Zur Einordnung: Frühere Ziehungen sagen künftige Ergebnisse nicht voraus. Jede gültige Kombination hat bei einer fairen Ziehung dieselbe Chance.",
-            bg=COLORS["blue_light"], fg="#28468e", anchor="w", justify="left",
-            font=("Segoe UI", 9), padx=12, pady=10, wraplength=1040,
-        )
-        self.notice.grid(row=1, column=0, sticky="ew", pady=(0, 14))
+        tk.Label(root, text="Frühere Ziehungen sagen künftige Ergebnisse nicht voraus. Jede gültige Kombination hat bei einer fairen Ziehung dieselbe Gewinnchance.", bg=COLORS["blue_light"], fg="#294a8b", padx=12, pady=9, anchor="w", justify="left", wraplength=1100, font=("Segoe UI", 9)).grid(row=1, column=0, sticky="ew", pady=(0, 13))
 
-        self.cards_frame = ttk.Frame(outer)
-        self.cards_frame.grid(row=2, column=0, sticky="ew", pady=(0, 14))
+        cards = ttk.Frame(root)
+        cards.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         for col in range(3):
-            self.cards_frame.columnconfigure(col, weight=1)
-        self.draws_value = self._make_stat_card(self.cards_frame, 0, "AUSGEWERTETE ZIEHUNGEN")
-        self.hot_value = self._make_stat_card(self.cards_frame, 1, "HÄUFIGSTE ZAHL")
-        self.cold_value = self._make_stat_card(self.cards_frame, 2, "LÄNGSTE PAUSE")
+            cards.columnconfigure(col, weight=1)
+        self.draws_card = self._card(cards, 0, "GESPEICHERTE ZIEHUNGEN")
+        self.hot_card = self._card(cards, 1, "HÄUFIGSTE ZAHL")
+        self.gap_card = self._card(cards, 2, "LÄNGSTE PAUSE")
 
-        content = ttk.Frame(outer)
-        content.grid(row=3, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=3)
-        content.columnconfigure(1, weight=2)
-        content.rowconfigure(0, weight=1)
+        import_bar = ttk.Frame(root, style="Card.TFrame", padding=10)
+        import_bar.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        import_bar.columnconfigure(1, weight=1)
+        ttk.Label(import_bar, text="Lokale Datenbank", font=("Segoe UI", 10, "bold")).grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.status = ttk.Label(import_bar, text="Noch keine Ziehungen importiert", style="Muted.TLabel")
+        self.status.grid(row=0, column=1, sticky="w")
+        ttk.Button(import_bar, text="Datenbank öffnen", command=self.open_data_folder).grid(row=0, column=2)
 
-        left = ttk.Frame(content)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
-        left.columnconfigure(0, weight=1)
-        left.rowconfigure(1, weight=1)
+        tabs = ttk.Notebook(root)
+        tabs.grid(row=4, column=0, sticky="nsew")
+        analysis = ttk.Frame(tabs, padding=12)
+        history = ttk.Frame(tabs, padding=12)
+        tabs.add(analysis, text="Analyse & Tipps")
+        tabs.add(history, text="Ziehungen & Vergleich")
+        self._build_analysis_tab(analysis)
+        self._build_history_tab(history)
 
-        controls = ttk.Frame(left, style="Card.TFrame", padding=16)
-        controls.grid(row=0, column=0, sticky="ew", pady=(0, 12))
-        controls.columnconfigure(1, weight=1)
-        ttk.Label(controls, text="Tipp-Einstellungen", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 12))
+        ttk.Label(root, text=f"Datenbank: {DB_PATH}  ·  Analysewerkzeug, keine Gewinnprognose", style="Muted.TLabel").grid(row=5, column=0, sticky="w", pady=(10, 0))
 
-        self.tip_count = self._field(controls, "Anzahl Tipps", "10", 1, 0)
-        self.sum_min = self._field(controls, "Summe von", "90", 1, 2)
-        self.sum_max = self._field(controls, "bis", "190", 1, 4)
-        self.even_min = self._field(controls, "Gerade Zahlen min.", "1", 2, 0)
-        self.even_max = self._field(controls, "max.", "5", 2, 2)
-
-        ttk.Label(controls, text="Auswahlmodus").grid(row=3, column=0, sticky="w", pady=(8, 0))
-        self.mode = tk.StringVar(value="Zufällig")
-        ttk.Combobox(controls, textvariable=self.mode, state="readonly", values=("Zufällig", "Häufige Zahlen berücksichtigen"), width=27).grid(row=3, column=1, columnspan=2, sticky="ew", padx=(8, 12), pady=(8, 0))
-        ttk.Button(controls, text="Tipps erstellen", style="Primary.TButton", command=self.generate).grid(row=3, column=3, columnspan=2, sticky="e", pady=(8, 0))
-
-        results = ttk.Frame(left, style="Card.TFrame", padding=14)
-        results.grid(row=1, column=0, sticky="nsew")
-        results.columnconfigure(0, weight=1)
-        results.rowconfigure(1, weight=1)
-        result_head = ttk.Frame(results, style="Card.TFrame")
-        result_head.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        result_head.columnconfigure(0, weight=1)
-        ttk.Label(result_head, text="Deine Tipps", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
-        ttk.Button(result_head, text="CSV exportieren", command=self.export_csv).grid(row=0, column=1, sticky="e")
-        columns = ("index", "numbers", "total", "even", "odd")
-        self.table = ttk.Treeview(results, columns=columns, show="headings", height=10)
-        for key, title, width in (("index", "Nr.", 55), ("numbers", "Zahlen", 230), ("total", "Summe", 70), ("even", "Gerade", 70), ("odd", "Ungerade", 80)):
-            self.table.heading(key, text=title)
-            self.table.column(key, width=width, anchor="center")
-        self.table.grid(row=1, column=0, sticky="nsew")
-        scrollbar = ttk.Scrollbar(results, orient="vertical", command=self.table.yview)
-        scrollbar.grid(row=1, column=1, sticky="ns")
-        self.table.configure(yscrollcommand=scrollbar.set)
-
-        right = ttk.Frame(content, style="Card.TFrame", padding=16)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.columnconfigure(0, weight=1)
-        right.rowconfigure(2, weight=1)
-        ttk.Label(right, text="Zahlen-Überblick", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
-        self.data_status = ttk.Label(right, text=self.data_label, style="Muted.TLabel")
-        self.data_status.grid(row=1, column=0, sticky="w", pady=(4, 12))
-        self.frequency_canvas = tk.Canvas(right, bg="white", height=250, highlightthickness=0)
-        self.frequency_canvas.grid(row=2, column=0, sticky="nsew")
-        ttk.Label(right, text="Häufigkeit je Zahl · absteigend nach Zahlen sortiert", style="Muted.TLabel", wraplength=320).grid(row=3, column=0, sticky="w", pady=(8, 0))
-        ttk.Button(right, text="Demo-Daten wiederherstellen", command=self.restore_demo).grid(row=4, column=0, sticky="w", pady=(14, 0))
-
-        footer = ttk.Label(outer, text="Analyse und Organisation – keine Gewinnprognose. Bitte verantwortungsvoll spielen.", style="Subtitle.TLabel")
-        footer.grid(row=4, column=0, sticky="w", pady=(12, 0))
-        self.frequency_canvas.bind("<Configure>", lambda _event: self.draw_frequency_chart())
-
-    def _make_stat_card(self, parent: ttk.Frame, column: int, title: str) -> ttk.Label:
-        card = ttk.Frame(parent, style="Card.TFrame", padding=(16, 12))
-        card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 6 if column < 2 else 0))
-        ttk.Label(card, text=title, style="CardTitle.TLabel").pack(anchor="w")
+    def _card(self, parent: ttk.Frame, col: int, title: str) -> ttk.Label:
+        card = ttk.Frame(parent, style="Card.TFrame", padding=13)
+        card.grid(row=0, column=col, sticky="ew", padx=(0, 8 if col < 2 else 0))
+        ttk.Label(card, text=title, style="CardHead.TLabel").pack(anchor="w")
         value = ttk.Label(card, text="—", style="CardValue.TLabel")
-        value.pack(anchor="w", pady=(4, 0))
+        value.pack(anchor="w", pady=(5, 0))
         return value
 
+    def _build_analysis_tab(self, tab: ttk.Frame) -> None:
+        tab.columnconfigure(0, weight=3)
+        tab.columnconfigure(1, weight=2)
+        tab.rowconfigure(0, weight=1)
+        controls = ttk.Frame(tab, style="Card.TFrame", padding=14)
+        controls.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        controls.columnconfigure(1, weight=1)
+        ttk.Label(controls, text="Tipp-Einstellungen", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", pady=(0, 10))
+        self.tip_count = self._entry(controls, "Anzahl Tipps", "10", 1, 0)
+        self.sum_min = self._entry(controls, "Summe von", "90", 1, 2)
+        self.sum_max = self._entry(controls, "bis", "190", 1, 4)
+        self.even_min = self._entry(controls, "Gerade min.", "1", 2, 0)
+        self.even_max = self._entry(controls, "max.", "5", 2, 2)
+        ttk.Label(controls, text="Auswahl").grid(row=3, column=0, sticky="w", pady=(8, 0))
+        self.mode = tk.StringVar(value="Zufällig")
+        ttk.Combobox(controls, textvariable=self.mode, values=("Zufällig", "Häufige Zahlen berücksichtigen"), state="readonly", width=29).grid(row=3, column=1, columnspan=3, sticky="w", pady=(8, 0))
+        ttk.Button(controls, text="Tipps erzeugen", style="Primary.TButton", command=self.generate).grid(row=4, column=0, columnspan=2, sticky="w", pady=(12, 12))
+        ttk.Button(controls, text="Tipps als CSV speichern", command=self.export).grid(row=4, column=2, columnspan=2, sticky="w", pady=(12, 12))
+        self.tip_table = ttk.Treeview(controls, columns=("no", "numbers", "sum", "even", "odd"), show="headings", height=12)
+        for key, title, width in (("no", "Nr.", 45), ("numbers", "Zahlen", 205), ("sum", "Summe", 65), ("even", "Gerade", 65), ("odd", "Ungerade", 70)):
+            self.tip_table.heading(key, text=title)
+            self.tip_table.column(key, width=width, anchor="center")
+        self.tip_table.grid(row=5, column=0, columnspan=4, sticky="nsew")
+
+        chart_frame = ttk.Frame(tab, style="Card.TFrame", padding=14)
+        chart_frame.grid(row=0, column=1, sticky="nsew")
+        chart_frame.columnconfigure(0, weight=1)
+        chart_frame.rowconfigure(1, weight=1)
+        ttk.Label(chart_frame, text="Häufigkeit 1–49", font=("Segoe UI", 12, "bold")).grid(row=0, column=0, sticky="w")
+        self.chart = tk.Canvas(chart_frame, bg="white", highlightthickness=0, height=260)
+        self.chart.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        ttk.Label(chart_frame, text="Die Darstellung beschreibt nur die importierten vergangenen Ziehungen.", style="Muted.TLabel", wraplength=330).grid(row=2, column=0, sticky="w", pady=(8, 0))
+        self.chart.bind("<Configure>", lambda _event: self.draw_chart())
+
     @staticmethod
-    def _field(parent: ttk.Frame, label: str, initial: str, row: int, col: int) -> tk.StringVar:
-        ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", pady=(4, 0))
-        variable = tk.StringVar(value=initial)
-        ttk.Entry(parent, textvariable=variable, width=7).grid(row=row, column=col + 1, sticky="w", padx=(7, 14), pady=(4, 0))
-        return variable
+    def _entry(parent: ttk.Frame, label: str, initial: str, row: int, col: int) -> tk.StringVar:
+        ttk.Label(parent, text=label).grid(row=row, column=col, sticky="w", pady=5)
+        var = tk.StringVar(value=initial)
+        ttk.Entry(parent, textvariable=var, width=8).grid(row=row, column=col + 1, sticky="w", padx=(5, 12), pady=5)
+        return var
 
-    def refresh_dashboard(self) -> None:
-        stats = number_statistics(self.draws)
-        frequent = sorted(stats, key=lambda n: (-int(stats[n]["count"] or 0), n))[0]
-        long_pause = sorted(stats, key=lambda n: (-int(stats[n]["draws_ago"] or 0), n))[0]
-        self.draws_value.configure(text=str(len(self.draws)))
-        self.hot_value.configure(text=f"{frequent:02d}  ·  {stats[frequent]['count']}×")
-        self.cold_value.configure(text=f"{long_pause:02d}  ·  {stats[long_pause]['draws_ago']} Ziehungen")
-        self.data_status.configure(text=self.data_label)
-        self.draw_frequency_chart()
+    def _build_history_tab(self, tab: ttk.Frame) -> None:
+        tab.columnconfigure(0, weight=1)
+        tab.rowconfigure(1, weight=1)
+        toolbar = ttk.Frame(tab)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 9))
+        ttk.Label(toolbar, text="Vergleiche Gesamtzahl und jüngeren Zeitraum:").pack(side="left", padx=(0, 8))
+        ttk.Combobox(toolbar, textvariable=self.window_var, values=("10", "20", "50"), state="readonly", width=6).pack(side="left")
+        ttk.Button(toolbar, text="Vergleich aktualisieren", command=self.refresh).pack(side="left", padx=8)
+        ttk.Label(toolbar, text="Datenstand: neueste Ziehung zuerst in der Liste", style="Muted.TLabel").pack(side="right")
+        panes = ttk.Panedwindow(tab, orient="vertical")
+        panes.grid(row=1, column=0, sticky="nsew")
+        stats_frame = ttk.Frame(panes)
+        draws_frame = ttk.Frame(panes)
+        panes.add(stats_frame, weight=3)
+        panes.add(draws_frame, weight=2)
+        stats_frame.rowconfigure(0, weight=1)
+        stats_frame.columnconfigure(0, weight=1)
+        self.stats_table = ttk.Treeview(stats_frame, columns=("n", "all", "recent", "gap"), show="headings", height=15)
+        for key, title, width in (("n", "Zahl", 100), ("all", "Gesamt", 130), ("recent", "Letzte Ziehungen", 180), ("gap", "Ziehungen seit letztem Auftreten", 230)):
+            self.stats_table.heading(key, text=title)
+            self.stats_table.column(key, width=width, anchor="center")
+        self.stats_table.grid(row=0, column=0, sticky="nsew")
+        stats_scroll = ttk.Scrollbar(stats_frame, orient="vertical", command=self.stats_table.yview)
+        stats_scroll.grid(row=0, column=1, sticky="ns")
+        self.stats_table.configure(yscrollcommand=stats_scroll.set)
 
-    def draw_frequency_chart(self) -> None:
-        canvas = self.frequency_canvas
-        if not canvas.winfo_exists():
+        draws_frame.rowconfigure(0, weight=1)
+        draws_frame.columnconfigure(0, weight=1)
+        self.draw_table = ttk.Treeview(draws_frame, columns=("date", "numbers", "sum"), show="headings", height=8)
+        for key, title, width in (("date", "Datum", 150), ("numbers", "Gezogene Zahlen", 330), ("sum", "Summe", 100)):
+            self.draw_table.heading(key, text=title)
+            self.draw_table.column(key, width=width, anchor="center")
+        self.draw_table.grid(row=0, column=0, sticky="nsew")
+
+    def refresh(self) -> None:
+        self.draws = load_draws()
+        stats = calculate_stats(self.draws, int(self.window_var.get()))
+        recent_window = int(self.window_var.get())
+        hottest = max(range(LOW, HIGH + 1), key=lambda n: (stats[n]["total"], -n))
+        longest = max(range(LOW, HIGH + 1), key=lambda n: (stats[n]["gap"], -n))
+        self.draws_card.configure(text=str(len(self.draws)))
+        self.hot_card.configure(text=f"{hottest:02d} · {stats[hottest]['total']}×")
+        self.gap_card.configure(text=f"{longest:02d} · {stats[longest]['gap']} Ziehungen")
+        self.status.configure(text=f"{len(self.draws)} Ziehungen gespeichert · Fenstervergleich: letzte {min(recent_window, len(self.draws))}")
+        self.stats_table.delete(*self.stats_table.get_children())
+        for n in range(LOW, HIGH + 1):
+            self.stats_table.insert("", "end", values=(f"{n:02d}", stats[n]["total"], stats[n]["recent"], stats[n]["gap"]))
+        self.draw_table.delete(*self.draw_table.get_children())
+        for date, numbers in reversed(self.draws[-200:]):
+            self.draw_table.insert("", "end", values=(date or "ohne Datum", "  ·  ".join(f"{n:02d}" for n in numbers), sum(numbers)))
+        self.draw_chart()
+
+    def draw_chart(self) -> None:
+        if not hasattr(self, "chart"):
             return
+        canvas = self.chart
         canvas.delete("all")
-        width = max(canvas.winfo_width(), 240)
-        height = max(canvas.winfo_height(), 200)
-        stats = number_statistics(self.draws)
-        counts = [int(stats[n]["count"] or 0) for n in range(1, 50)]
-        maximum = max(counts) or 1
-        margin_x, top, bottom = 10, 10, 22
-        plot_height = height - top - bottom
+        width, height = max(canvas.winfo_width(), 280), max(canvas.winfo_height(), 180)
+        stats = calculate_stats(self.draws)
+        values = [int(stats[n]["total"]) for n in range(LOW, HIGH + 1)]
+        maximum = max(values, default=1) or 1
+        margin_x, margin_y, bottom = 10, 10, 20
+        plot_height = height - margin_y - bottom
         slot = (width - 2 * margin_x) / 49
-        bar_width = max(2, slot * 0.62)
-        for index, count in enumerate(counts):
-            x = margin_x + index * slot
-            bar_height = (count / maximum) * plot_height
-            canvas.create_rectangle(x, top + plot_height - bar_height, x + bar_width, top + plot_height, fill=COLORS["blue"] if count else COLORS["border"], outline="")
-        canvas.create_line(margin_x, height - bottom, width - margin_x, height - bottom, fill=COLORS["border"])
-        for number in (1, 10, 20, 30, 40, 49):
-            x = margin_x + (number - 1) * slot
-            canvas.create_text(x, height - 8, text=str(number), fill=COLORS["muted"], font=("Segoe UI", 8), anchor="s")
+        for i, value in enumerate(values):
+            x = margin_x + i * slot
+            bar_height = value / maximum * plot_height
+            canvas.create_rectangle(x, margin_y + plot_height - bar_height, x + max(2, slot * .64), margin_y + plot_height, fill=COLORS["blue"], outline="")
+        canvas.create_line(margin_x, height - bottom, width - margin_x, height - bottom, fill=COLORS["line"])
+        for n in (1, 10, 20, 30, 40, 49):
+            x = margin_x + (n - 1) * slot
+            canvas.create_text(x, height - 5, text=str(n), fill=COLORS["muted"], font=("Segoe UI", 8), anchor="s")
 
-    def import_csv(self) -> None:
-        path = filedialog.askopenfilename(title="Ziehungsdaten auswählen", filetypes=(("CSV-Dateien", "*.csv"), ("Alle Dateien", "*.*")))
+    def import_file(self) -> None:
+        path = filedialog.askopenfilename(title="CSV mit Ziehungen wählen", filetypes=(("CSV-Dateien", "*.csv"), ("Alle Dateien", "*.*")))
         if not path:
             return
         try:
-            self.draws = parse_draw_csv(path)
-            self.data_label = f"Importiert: {Path(path).name} (Zeilen: älteste zuerst)"
-            self.tickets.clear()
-            self._clear_table()
-            self.refresh_dashboard()
-        except (OSError, UnicodeError, ValueError) as error:
+            added, duplicates, skipped = import_draw_file(path)
+            self.refresh()
+            messagebox.showinfo("Import abgeschlossen", f"Neu gespeichert: {added}\nBereits vorhanden: {duplicates}\nÜbersprungen/ungültig: {skipped}", parent=self)
+        except (OSError, UnicodeError, csv.Error, ValueError) as error:
             messagebox.showerror("Import fehlgeschlagen", str(error), parent=self)
 
-    def restore_demo(self) -> None:
-        self.draws = demo_draws()
-        self.data_label = "Beispiel-Daten (synthetisch)"
-        self.tickets.clear()
-        self._clear_table()
-        self.refresh_dashboard()
+    def import_folder(self) -> None:
+        folder = filedialog.askdirectory(title="Ordner mit CSV-Dateien auswählen")
+        if not folder:
+            return
+        try:
+            added, duplicates, skipped, errors = import_csv_folder(folder)
+            self.refresh()
+            messagebox.showinfo("Daten aktualisiert", f"Neu gespeichert: {added}\nBereits vorhanden: {duplicates}\nÜbersprungen/ungültig: {skipped}\nDateifehler: {errors}", parent=self)
+        except (OSError, ValueError) as error:
+            messagebox.showerror("Aktualisierung fehlgeschlagen", str(error), parent=self)
+
+    def open_data_folder(self) -> None:
+        APP_DIR.mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(APP_DIR)  # type: ignore[attr-defined]
+        else:
+            messagebox.showinfo("Datenbankordner", str(APP_DIR), parent=self)
 
     def generate(self) -> None:
         try:
-            count = int(self.tip_count.get())
-            low_sum = int(self.sum_min.get())
-            high_sum = int(self.sum_max.get())
-            min_even = int(self.even_min.get())
-            max_even = int(self.even_max.get())
-            self.tickets = create_tickets(self.draws, count, low_sum, high_sum, min_even, max_even, self.mode.get())
+            self.tickets = build_tips(
+                self.draws, int(self.tip_count.get()), int(self.sum_min.get()), int(self.sum_max.get()),
+                int(self.even_min.get()), int(self.even_max.get()),
+                self.mode.get() == "Häufige Zahlen berücksichtigen",
+            )
         except ValueError as error:
             messagebox.showerror("Einstellungen prüfen", str(error), parent=self)
             return
-        self._clear_table()
-        for index, ticket in enumerate(self.tickets, start=1):
-            even = sum(number % 2 == 0 for number in ticket)
-            self.table.insert("", "end", values=(index, "  ·  ".join(f"{n:02d}" for n in ticket), sum(ticket), even, 6 - even))
+        self.tip_table.delete(*self.tip_table.get_children())
+        for i, ticket in enumerate(self.tickets, 1):
+            even = sum(n % 2 == 0 for n in ticket)
+            self.tip_table.insert("", "end", values=(i, "  ·  ".join(f"{n:02d}" for n in ticket), sum(ticket), even, 6 - even))
 
-    def _clear_table(self) -> None:
-        self.table.delete(*self.table.get_children())
-
-    def export_csv(self) -> None:
+    def export(self) -> None:
         if not self.tickets:
-            messagebox.showinfo("Noch keine Tipps", "Erzeuge zuerst Tipps, die exportiert werden können.", parent=self)
+            messagebox.showinfo("Keine Tipps", "Erzeuge zuerst Tipps zum Exportieren.", parent=self)
             return
-        path = filedialog.asksaveasfilename(title="Tipps exportieren", defaultextension=".csv", filetypes=(("CSV-Datei", "*.csv"),))
-        if not path:
-            return
-        try:
-            save_tickets_csv(path, self.tickets)
-            messagebox.showinfo("Export abgeschlossen", f"Die Tipps wurden gespeichert:\n{path}", parent=self)
-        except OSError as error:
-            messagebox.showerror("Export fehlgeschlagen", str(error), parent=self)
+        path = filedialog.asksaveasfilename(title="Tipps speichern", defaultextension=".csv", filetypes=(("CSV-Datei", "*.csv"),))
+        if path:
+            try:
+                export_tips(path, self.tickets)
+                messagebox.showinfo("Export abgeschlossen", f"Gespeichert unter:\n{path}", parent=self)
+            except OSError as error:
+                messagebox.showerror("Export fehlgeschlagen", str(error), parent=self)
 
 
 def main() -> None:
-    LottoApp().mainloop()
+    connect_db().close()
+    LottoProApp().mainloop()
 
 
 if __name__ == "__main__":

@@ -1,3 +1,4 @@
+import csv
 import tempfile
 import unittest
 from pathlib import Path
@@ -5,37 +6,39 @@ from pathlib import Path
 import lotto_app
 
 
-class LottoAppTests(unittest.TestCase):
-    def test_stats_frequency_and_last_seen(self):
-        draws = [[1, 2, 3, 4, 5, 6], [1, 7, 8, 9, 10, 11], [2, 12, 13, 14, 15, 16]]
-        stats = lotto_app.number_statistics(draws)
-        self.assertEqual(stats[1]["count"], 2)
-        self.assertEqual(stats[1]["draws_ago"], 1)
-        self.assertEqual(stats[6]["draws_ago"], 2)
+class LottoDataTests(unittest.TestCase):
+    def test_csv_parser_with_german_date_and_semicolon(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "draws.csv"
+            path.write_text("Datum;Zahl1;Zahl2;Zahl3;Zahl4;Zahl5;Zahl6\n03.01.2025;4;9;17;23;35;41\n", encoding="utf-8-sig")
+            rows, skipped = lotto_app.read_csv_draws(path)
+            self.assertEqual(rows, [("2025-01-03", [4, 9, 17, 23, 35, 41])])
+            self.assertEqual(skipped, 0)
 
-    def test_csv_import_skips_header_and_reads_six(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "draws.csv"
-            path.write_text("Datum;A;B;C;D;E;F\n2025-01-01;1;2;3;4;5;49\n", encoding="utf-8")
-            self.assertEqual(lotto_app.parse_draw_csv(path), [[1, 2, 3, 4, 5, 49]])
+    def test_csv_skips_header_and_extra_numeric_column(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "draws.csv"
+            path.write_text("date,n1,n2,n3,n4,n5,n6,bonus\n2025-01-03,4,9,17,23,35,41,7\n", encoding="utf-8")
+            rows, skipped = lotto_app.read_csv_draws(path)
+            self.assertEqual(rows, [])
+            self.assertEqual(skipped, 2)
 
-    def test_csv_rejects_bad_rows(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "draws.csv"
-            path.write_text("1;2;3;4;5;5\n", encoding="utf-8")
-            with self.assertRaises(ValueError):
-                lotto_app.parse_draw_csv(path)
+    def test_number_stats_for_recent_window_and_gap(self):
+        draws = [("2025-01-01", [1, 2, 3, 4, 5, 6]), ("2025-01-08", [1, 7, 8, 9, 10, 11])]
+        stats = lotto_app.calculate_stats(draws, 1)
+        self.assertEqual(stats[1]["total"], 2)
+        self.assertEqual(stats[1]["recent"], 1)
+        self.assertEqual(stats[2]["gap"], 1)
 
-    def test_tickets_are_unique_and_respect_filters(self):
-        tickets = lotto_app.create_tickets([], 8, 90, 190, 1, 5, "Zufällig")
-        self.assertEqual(len(tickets), 8)
-        self.assertEqual(len({tuple(ticket) for ticket in tickets}), 8)
-        for ticket in tickets:
-            self.assertTrue(lotto_app.ticket_is_valid(ticket, 90, 190, 1, 5))
+    def test_ticket_generation_and_validation(self):
+        tickets = lotto_app.build_tips([], 5, 90, 190, 1, 5, False)
+        self.assertEqual(len(tickets), 5)
+        self.assertEqual(len({tuple(ticket) for ticket in tickets}), 5)
+        self.assertTrue(all(90 <= sum(ticket) <= 190 for ticket in tickets))
 
-    def test_rejects_invalid_ticket_count(self):
+    def test_bad_filter_rejected(self):
         with self.assertRaises(ValueError):
-            lotto_app.create_tickets([], 0, 90, 190, 1, 5, "Zufällig")
+            lotto_app.build_tips([], 1, 200, 100, 1, 5, False)
 
 
 if __name__ == "__main__":

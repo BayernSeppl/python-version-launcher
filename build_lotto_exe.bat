@@ -1,7 +1,7 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title LottoPro - EXE erstellen
+title LottoPro Analyse - EXE erstellen
 
 echo ============================================
 echo   LottoPro Analyse - Windows EXE-Build
@@ -10,22 +10,22 @@ echo.
 
 where py >nul 2>nul
 if errorlevel 1 (
-    echo FEHLER: Python 3 wurde nicht gefunden.
-    echo Installiere Python von python.org und aktiviere "Add Python to PATH".
-    pause
-    exit /b 1
+  echo FEHLER: Python 3 wurde nicht gefunden.
+  echo Installiere Python von python.org und aktiviere "Add Python to PATH".
+  pause
+  exit /b 1
 )
 
 if not exist "lotto_app.py" (
-    echo FEHLER: lotto_app.py fehlt im Projektordner.
-    pause
-    exit /b 1
+  echo FEHLER: lotto_app.py fehlt im Projektordner.
+  pause
+  exit /b 1
 )
 
 if not exist ".venv\Scripts\python.exe" (
-    echo Erstelle eine isolierte Python-Umgebung...
-    py -3 -m venv .venv
-    if errorlevel 1 goto :error
+  echo Erstelle isolierte Build-Umgebung...
+  py -3 -m venv .venv
+  if errorlevel 1 goto :error
 )
 
 set "PYTHON=.venv\Scripts\python.exe"
@@ -43,9 +43,8 @@ if not exist "dist\LottoPro.exe" goto :error
 
 echo.
 echo Build erfolgreich!
-echo Die EXE befindet sich unter:
-echo %~dp0dist\LottoPro.exe
-echo.
+echo EXE: %~dp0dist\LottoPro.exe
+echo Die lokale Datenbank wird unter %%APPDATA%%\LottoPro gespeichert.
 start "" explorer "%~dp0dist"
 pause
 exit /b 0
